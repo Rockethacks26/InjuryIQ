@@ -1,6 +1,9 @@
 import cv2
 import mediapipe as mp
 import numpy as np
+from ai_analysis import analyze_injury_risk
+import time
+import threading
 
 mp_pose = mp.solutions.pose
 mp_drawing = mp.solutions.drawing_utils
@@ -16,18 +19,24 @@ def calculate_angle(a, b, c):
         angle = 360 - angle
     return round(angle, 1)
 
-def get_risk_level(left_knee, right_knee):
-    diff = abs(left_knee - right_knee)
-    if diff > 20:
-        return "HIGH RISK", (0, 0, 255)
-    elif diff > 10:
-        return "MEDIUM RISK", (0, 165, 255)
-    else:
-        return "LOW RISK", (0, 255, 0)
-
 def is_visible(landmark, threshold=0.6):
-    """Check if a landmark is actually visible on screen"""
     return landmark.visibility > threshold
+
+# Shared state
+analysis_result = {"risk": "WAITING", "reason": "Stand in frame...", "action": ""}
+is_analyzing = False
+last_analysis_time = 0
+minutes_played = 87
+
+def run_analysis(left_knee, right_knee):
+    global analysis_result, is_analyzing
+    is_analyzing = True
+    try:
+        result = analyze_injury_risk(left_knee, right_knee, minutes_played)
+        analysis_result = result
+    except Exception as e:
+        print(f"Analysis error: {e}")
+    is_analyzing = False
 
 cap = cv2.VideoCapture(0)
 print("InjuryIQ running! Press Q to quit.")
@@ -46,7 +55,6 @@ while True:
         lm = results.pose_landmarks.landmark
         h, w = frame.shape[:2]
 
-        # Check if legs are actually visible
         legs_visible = (
             is_visible(lm[mp_pose.PoseLandmark.LEFT_KNEE]) and
             is_visible(lm[mp_pose.PoseLandmark.RIGHT_KNEE]) and
@@ -59,28 +67,53 @@ while True:
                 return [lm[landmark].x * w, lm[landmark].y * h]
 
             left_hip    = get_point(mp_pose.PoseLandmark.LEFT_HIP)
-            left_knee   = get_point(mp_pose.PoseLandmark.LEFT_KNEE)
+            left_knee_p = get_point(mp_pose.PoseLandmark.LEFT_KNEE)
             left_ankle  = get_point(mp_pose.PoseLandmark.LEFT_ANKLE)
             right_hip   = get_point(mp_pose.PoseLandmark.RIGHT_HIP)
-            right_knee  = get_point(mp_pose.PoseLandmark.RIGHT_KNEE)
+            right_knee_p = get_point(mp_pose.PoseLandmark.RIGHT_KNEE)
             right_ankle = get_point(mp_pose.PoseLandmark.RIGHT_ANKLE)
 
-            left_knee_angle  = calculate_angle(left_hip, left_knee, left_ankle)
-            right_knee_angle = calculate_angle(right_hip, right_knee, right_ankle)
-            risk, color = get_risk_level(left_knee_angle, right_knee_angle)
+            left_knee_angle  = calculate_angle(left_hip, left_knee_p, left_ankle)
+            right_knee_angle = calculate_angle(right_hip, right_knee_p, right_ankle)
 
-            cv2.putText(frame, f"L Knee: {left_knee_angle}°", (10, 40),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
-            cv2.putText(frame, f"R Knee: {right_knee_angle}°", (10, 80),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
-            cv2.putText(frame, risk, (10, 130),
-                        cv2.FONT_HERSHEY_SIMPLEX, 1.2, color, 3)
+            # Trigger AI in background every 10 seconds
+            current_time = time.time()
+            if current_time - last_analysis_time > 10 and not is_analyzing:
+                last_analysis_time = current_time
+                thread = threading.Thread(
+                    target=run_analysis,
+                    args=(left_knee_angle, right_knee_angle)
+                )
+                thread.daemon = True
+                thread.start()
+
+            # Pick color based on risk
+            risk = analysis_result["risk"].upper()
+            if "HIGH" in risk:
+                color = (0, 0, 255)
+            elif "MEDIUM" in risk:
+                color = (0, 165, 255)
+            else:
+                color = (0, 255, 0)
+
+            # Show analyzing indicator
+            status = "🔄 Analyzing..." if is_analyzing else f"RISK: {risk}"
+
+            cv2.putText(frame, f"L Knee: {left_knee_angle}", (10, 40),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255,255,255), 2)
+            cv2.putText(frame, f"R Knee: {right_knee_angle}", (10, 80),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255,255,255), 2)
+            cv2.putText(frame, status, (10, 130),
+                        cv2.FONT_HERSHEY_SIMPLEX, 1.0, color, 3)
+            cv2.putText(frame, analysis_result["reason"][:60], (10, 170),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255,255,255), 1)
+            cv2.putText(frame, analysis_result["action"][:60], (10, 200),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1)
         else:
-            # Show message when legs aren't visible
             cv2.putText(frame, "Step back so full body is visible", (10, 40),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0,255,255), 2)
 
-    cv2.imshow("InjuryIQ - Pose Detection", frame)
+    cv2.imshow("InjuryIQ - Live Analysis", frame)
     if cv2.waitKey(1) & 0xFF == ord('q'):
         break
 
