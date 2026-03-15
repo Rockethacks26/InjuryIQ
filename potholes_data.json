@@ -1,0 +1,65 @@
+[
+  {
+    "id": 1,
+    "lat": 41.65646172507006,
+    "lng": -83.60684134861349,
+    "impact": 6.56,
+    "timestamp": "2026-03-14T23:49:43.195100",
+    "severity": "MEDIUM",
+    "reported": false
+  },
+  {
+    "id": 2,
+    "lat": 41.656461770930264,
+    "lng": -83.60684129335628,
+    "impact": 6.63,
+    "timestamp": "2026-03-14T23:49:59.914256",
+    "severity": "MEDIUM",
+    "reported": false
+  },
+  {
+    "id": 3,
+    "lat": 41.656461770930264,
+    "lng": -83.60684129335628,
+    "impact": 6.62,
+    "timestamp": "2026-03-14T23:50:03.265707",
+    "severity": "MEDIUM",
+    "reported": false
+  },
+  {
+    "id": 4,
+    "lat": 41.656461899626294,
+    "lng": -83.6068411382834,
+    "impact": 6.6,
+    "timestamp": "2026-03-15T00:02:52.701828",
+    "severity": "MEDIUM",
+    "reported": false
+  },
+  {
+    "id": 5,
+    "lat": 41.65653209906948,
+    "lng": -83.60670409044519,
+    "impact": 7.15,
+    "timestamp": "2026-03-15T05:17:49.303069",
+    "severity": "MEDIUM",
+    "reported": false
+  },
+  {
+    "id": 6,
+    "lat": 41.65654047701532,
+    "lng": -83.60659427390237,
+    "impact": 6.3,
+    "timestamp": "2026-03-15T05:17:59.663026",
+    "severity": "MEDIUM",
+    "reported": false
+  },
+  {
+    "id": 7,
+    "lat": 41.656535596442765,
+    "lng": -83.60671625575061,
+    "impact": 6.18,
+    "timestamp": "2026-03-15T05:18:10.798641",
+    "severity": "MEDIUM",
+    "reported": false
+  }
+]

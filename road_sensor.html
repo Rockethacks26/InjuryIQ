@@ -1,0 +1,266 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>RoadSense Sensor</title>
+    <style>
+        body { font-family: Arial; background: #111; color: white; text-align: center; padding: 20px; }
+        h1 { color: #f0a500; }
+        button { background: #f0a500; color: black; border: none; padding: 15px 30px; font-size: 18px; border-radius: 10px; margin: 10px; }
+        .data { background: #222; padding: 15px; border-radius: 10px; margin: 10px 0; font-size: 14px; }
+        .status { font-size: 18px; margin: 20px 0; }
+        .connected { color: #00ff88; }
+        .disconnected { color: #ff4444; }
+        .pothole { color: #ff4444; font-size: 24px; font-weight: bold; }
+        #debug { color: yellow; font-size: 12px; margin-top: 20px; text-align: left; }
+
+        @keyframes flashbg {
+            0% { background: #ff4444; }
+            50% { background: #cc0000; }
+            100% { background: #ff4444; }
+        }
+    </style>
+</head>
+<body>
+
+    <div id="warning_banner" style="
+        display:none;
+        position:fixed;
+        top:0; left:0; right:0;
+        color:white;
+        font-size:26px;
+        font-weight:bold;
+        text-align:center;
+        padding:20px;
+        z-index:9999;
+        animation: flashbg 0.5s infinite;
+    ">⚠️ POTHOLE AHEAD!</div>
+
+    <h1>🛣️ RoadSense</h1>
+    <p>Strap to your bike or car and start detecting potholes!</p>
+
+    <div class="status" id="status">
+        <span class="disconnected">● Disconnected</span>
+    </div>
+
+    <button onclick="requestAndStart()">▶ Start Detecting</button>
+    <button onclick="stop()">■ Stop</button>
+
+    <div class="data">
+        <b>Acceleration (m/s²)</b><br>
+        X: <span id="ax">0</span> |
+        Y: <span id="ay">0</span> |
+        Z: <span id="az">0</span>
+    </div>
+
+    <div class="data">
+        <b>Impact Score</b><br>
+        <span id="impact" style="font-size: 28px; color: #f0a500;">0.00</span>
+    </div>
+
+    <div class="data">
+        <b>GPS Location</b><br>
+        Lat: <span id="lat">--</span><br>
+        Lng: <span id="lng">--</span>
+    </div>
+
+    <div class="data">
+        <b>Nearest Known Pothole</b><br>
+        <span id="nearest" style="color:#f0a500;">Scanning...</span>
+    </div>
+
+    <div class="pothole" id="pothole_alert" style="display:none;">
+        ⚠️ POTHOLE DETECTED!
+    </div>
+
+    <div class="data">
+        <b>Potholes detected this session:</b>
+        <span id="count" style="font-size:24px; color:#f0a500;">0</span>
+    </div>
+
+    <div id="debug"></div>
+
+    <script>
+        let ws = null
+        let sending = false
+        let baseline_y = -9.81
+        let pothole_count = 0
+        let last_pothole_time = 0
+        let gps = { lat: null, lng: null }
+        let orientation = { alpha: 0, beta: 0, gamma: 0 }
+        let filtered_z = 0
+        const alpha = 0.2
+        const SERVER = 'http://localhost:8083'
+        const WS_URL = 'wss://collusively-blouselike-kelli.ngrok-free.dev/ws'
+
+        function debug(msg) {
+            const d = document.getElementById('debug')
+            d.innerHTML = msg + '<br>' + d.innerHTML
+        }
+
+        async function requestAndStart() {
+            debug('Requesting permissions...')
+
+            if (typeof DeviceMotionEvent !== 'undefined' &&
+                typeof DeviceMotionEvent.requestPermission === 'function') {
+                try {
+                    const perm = await DeviceMotionEvent.requestPermission()
+                    debug('Motion: ' + perm)
+                    const orientPerm = await DeviceOrientationEvent.requestPermission()
+                    debug('Orientation: ' + orientPerm)
+                } catch(e) {
+                    debug('Permission error: ' + e.message)
+                }
+            } else {
+                debug('No permission API needed')
+            }
+
+            if (navigator.geolocation) {
+                navigator.geolocation.watchPosition(
+                    pos => {
+                        gps.lat = pos.coords.latitude
+                        gps.lng = pos.coords.longitude
+                        document.getElementById('lat').textContent = gps.lat.toFixed(6)
+                        document.getElementById('lng').textContent = gps.lng.toFixed(6)
+                    },
+                    err => debug('GPS error: ' + err.message),
+                    { enableHighAccuracy: true }
+                )
+            }
+
+            connect()
+            sending = true
+            window.addEventListener('devicemotion', handleMotion)
+            window.addEventListener('deviceorientation', handleOrientation)
+
+            // Start checking for nearby potholes
+            setInterval(checkNearbyPotholes, 3000)
+            debug('Sensors started!')
+        }
+
+        function connect() {
+            ws = new WebSocket(WS_URL)
+            ws.onopen = () => {
+                document.getElementById('status').innerHTML = '<span class="connected">● Connected!</span>'
+                debug('WebSocket connected!')
+            }
+            ws.onclose = () => {
+                document.getElementById('status').innerHTML = '<span class="disconnected">● Disconnected</span>'
+            }
+            ws.onerror = () => debug('WebSocket error')
+        }
+
+        function stop() {
+            sending = false
+            if (ws) ws.close()
+        }
+
+        function handleOrientation(e) {
+            orientation = {
+                alpha: r(e.alpha),
+                beta: r(e.beta),
+                gamma: r(e.gamma)
+            }
+        }
+
+        function handleMotion(e) {
+            const acc = e.accelerationIncludingGravity
+            if (!acc) return
+
+            const x = r(acc.x)
+            const y = r(acc.y)
+            const z = r(acc.z)
+
+            filtered_z = alpha * z + (1 - alpha) * filtered_z
+            const impact = Math.abs(y - baseline_y)
+
+            document.getElementById('ax').textContent = x
+            document.getElementById('ay').textContent = y
+            document.getElementById('az').textContent = z
+            document.getElementById('impact').textContent = impact.toFixed(2)
+
+            // Color impact score
+            const impactEl = document.getElementById('impact')
+            if (impact > 8) impactEl.style.color = '#ff4444'
+            else if (impact > 5) impactEl.style.color = '#ff8800'
+            else impactEl.style.color = '#f0a500'
+
+            const now = Date.now()
+            const is_pothole = impact > 6.0 && (now - last_pothole_time) > 2000
+
+            if (is_pothole) {
+                last_pothole_time = now
+                pothole_count++
+                document.getElementById('count').textContent = pothole_count
+                document.getElementById('pothole_alert').style.display = 'block'
+                debug(`🕳️ Pothole detected! Impact: ${impact.toFixed(2)}`)
+                setTimeout(() => {
+                    document.getElementById('pothole_alert').style.display = 'none'
+                }, 1500)
+            }
+
+            if (!sending || !ws || ws.readyState !== WebSocket.OPEN) return
+
+            ws.send(JSON.stringify({
+                type: 'road',
+                acceleration: { x, y, z },
+                rotation: orientation,
+                impact: r(impact),
+                is_pothole,
+                gps,
+                timestamp: Date.now()
+            }))
+        }
+
+        async function checkNearbyPotholes() {
+            if (!gps.lat) return
+
+            try {
+                const res = await fetch(`${SERVER}/api/potholes`)
+                const data = await res.json()
+
+                if (data.potholes.length === 0) {
+                    document.getElementById('nearest').textContent = 'No potholes mapped yet'
+                    return
+                }
+
+                // Find closest pothole
+                const withDist = data.potholes.map(p => ({
+                    ...p,
+                    dist: Math.round(getDistance(gps.lat, gps.lng, p.lat, p.lng))
+                }))
+
+                const closest = withDist.sort((a, b) => a.dist - b.dist)[0]
+
+                document.getElementById('nearest').textContent =
+                    `${closest.severity} severity — ${closest.dist}m away`
+
+                // Flash warning if within 50 meters
+                if (closest.dist < 50) {
+                    const banner = document.getElementById('warning_banner')
+                    banner.textContent = `⚠️ ${closest.severity} POTHOLE ${closest.dist}m AWAY!`
+                    banner.style.display = 'block'
+                    setTimeout(() => {
+                        banner.style.display = 'none'
+                    }, 3000)
+                }
+
+            } catch(e) {
+                debug('Nearby check error: ' + e.message)
+            }
+        }
+
+        function getDistance(lat1, lng1, lat2, lng2) {
+            const R = 6371000
+            const dLat = (lat2 - lat1) * Math.PI / 180
+            const dLng = (lng2 - lng1) * Math.PI / 180
+            const a = Math.sin(dLat/2) * Math.sin(dLat/2) +
+                      Math.cos(lat1 * Math.PI/180) * Math.cos(lat2 * Math.PI/180) *
+                      Math.sin(dLng/2) * Math.sin(dLng/2)
+            return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a))
+        }
+
+        function r(n) { return n ? Math.round(n * 100) / 100 : 0 }
+    </script>
+</body>
+</html>
